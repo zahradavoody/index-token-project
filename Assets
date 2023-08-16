@@ -1,0 +1,335 @@
+// SPDX-License-Identifier: MIT
+//zahra davoodabady
+pragma solidity ^0.8.18;
+
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
+import "@openzeppelin/contracts/utils/Counters.sol";
+import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+
+/**
+ * @title Assets
+ * @dev A contract for managing assets with access control and pausability.
+ */
+contract Assets is Pausable, Ownable, AccessControl {
+
+    using SafeMath for uint;
+    using Counters for Counters.Counter;
+
+    Counters.Counter private assetId;
+    bytes32 public constant Admin = keccak256("Admin");
+
+    mapping (uint256 => Asset) public whiteListAssetMap;
+
+    /**
+     * @dev Asset struct
+     */
+    struct Asset {
+        uint256 id;
+        uint256 decimal;
+        string name;
+        string symbol;
+        string chainName;
+        uint256 chainId;
+        address tokenAddress;
+        bool enabled;
+        bool isIndex;
+        bool exist;
+    }
+
+    // Events
+    event AssetCreated(uint256 _id, string _name, string _symbol, string _chainName, address _tokenAddress, bool _isIndex);
+    event AssetUpdated(uint256 _id, string _name, string _symbol, string _chainName, address _tokenAddress);
+    event AssetEnabled(uint256 _id);
+    event AssetDisabled(uint256 _id);
+    event AddAdminRole(address indexed adminAddress, string indexed role);
+    event DelAdminRole(address indexed adminAddress, string indexed role);
+
+    // Modifiers & Related Functions
+    modifier onlyAdmin() {
+        require(isAdmin(msg.sender) || isRootAdmin(msg.sender), "Restricted to Admins.");
+        _;
+    }
+
+    modifier onlyRootAdmin() {
+        require(isRootAdmin(msg.sender), "Restricted to Admins.");
+        _;
+    }
+
+    /**
+     * @dev Checks if an address has the root admin role.
+     * @param account The address to check.
+     * @return A boolean indicating if the address is a root admin.
+     */
+    function isRootAdmin(address account) public view returns (bool) {
+        return hasRole(DEFAULT_ADMIN_ROLE, account);
+    }
+
+    /**
+     * @dev Checks if an address has the admin role.
+     * @param account The address to check.
+     * @return A boolean indicating if the address is an admin.
+     */
+    function isAdmin(address account) public view returns (bool) {
+        return hasRole(Admin, account);
+    }
+
+    /**
+     * @dev Grants the admin role to an address.
+     * @param account The address to grant the admin role.
+     */
+    function addAdmin(address account) public onlyRootAdmin {
+        grantRole(Admin, account);
+        emit AddAdminRole(account, "Admin");
+    }
+
+    /**
+     * @dev Revokes the admin role from an address.
+     * @param account The address to revoke the admin role from.
+     */
+    function RemoveAdmin(address account) public onlyRootAdmin {
+        require(isRootAdmin(account) == false, "Removing Root Admin is not Allowed");
+        revokeRole(Admin, account);
+        emit DelAdminRole(account, "Admin");
+    }
+
+    /**
+     * @dev Pauses the contract. Can only be called by admins.
+     */
+    function PauseContract() public onlyAdmin {
+        _pause();
+    }
+
+    /**
+     * @dev Unpauses the contract. Can only be called by admins.
+     */
+    function UnPauseContract() public onlyAdmin {
+        _unpause();
+    }
+
+    /**
+     * @dev Constructor function.
+     */
+    constructor() {
+        _setupRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _setRoleAdmin(Admin, DEFAULT_ADMIN_ROLE);
+        assetId.increment();
+    }
+
+    /**
+     * @dev Adds a new asset.
+     * @param _decimal The decimal value of the asset.
+     * @param _name The name of the asset.
+     * @param _symbol The symbol of the asset.
+     * @param _chainName The name of the chain.
+     * @param _chainId The ID of the chain.
+     * @param _tokenAddress The address of the token.
+     * @param _enabled A boolean indicating if the asset is enabled.
+     * @param _isIndex A boolean indicating if the asset is index or ordinery asset.
+     */
+    function addAsset(
+        uint256 _decimal,
+        string memory _name,
+        string memory _symbol,
+        string memory _chainName,
+        uint256 _chainId,
+        address _tokenAddress,
+        bool _enabled,
+        bool _isIndex
+    )
+        public
+        whenNotPaused
+        onlyAdmin
+    {
+        require(_decimal != 0, "decimal should not be 0");
+        require(keccak256(abi.encodePacked(_name)) != keccak256(abi.encodePacked("")), "name should not be null");
+        require(keccak256(abi.encodePacked(_symbol)) != keccak256(abi.encodePacked("")), "symbol should not be null");
+        require(keccak256(abi.encodePacked(_chainName)) != keccak256(abi.encodePacked("")), "chainName should not be null");
+        require(_chainId != 0, "chainId should not be 0");
+        require(_tokenAddress != address(0), "tokenAddress should not be 0");
+        require(checkAssetExist(_decimal, _chainId, _tokenAddress) == false, "Asset already exists.");
+        uint256 _id = assetId.current();
+        require(whiteListAssetMap[_id].exist == false, "Asset already exists.");
+
+        Asset memory asset = Asset(
+            _id,
+            _decimal,
+            _name,
+            _symbol,
+            _chainName,
+            _chainId,
+            _tokenAddress,
+            _enabled,
+            _isIndex,
+            true
+        );
+
+        whiteListAssetMap[_id] = asset;
+
+        assetId.increment();
+
+        emit AssetCreated(_id, _name, _symbol, _chainName, _tokenAddress, _isIndex);
+    }
+
+    /**
+     * @dev Disables an existing asset.
+     * @param _id The ID of the asset to disable.
+     */
+    function disableAsset(uint256 _id) public onlyAdmin whenNotPaused {
+        require(_id != 0, "id should not be 0");
+        require(whiteListAssetMap[_id].exist == true, "Asset doesn't exist");
+        require(whiteListAssetMap[_id].enabled == true, "Asset is disabled");
+        whiteListAssetMap[_id].enabled = false;
+        emit AssetDisabled(_id);
+    }
+
+    /**
+     * @dev Enables a disabled asset.
+     * @param _id The ID of the asset to enable.
+     */
+    function enableAsset(uint256 _id) public onlyAdmin whenNotPaused {
+        require(_id != 0, "id should not be 0");
+        require(whiteListAssetMap[_id].exist == true, "Asset doesn't exist");
+        require(whiteListAssetMap[_id].enabled == false, "Asset is enabled");
+        whiteListAssetMap[_id].enabled = true;
+        emit AssetEnabled(_id);
+    }
+
+    /**
+     * @dev Updates an existing asset.
+     * @param _id The ID of the asset to update.
+     * @param _decimal The decimal value of the asset.
+     * @param _name The name of the asset.
+     * @param _symbol The symbol of the asset.
+     * @param _chainName The name of the chain.
+     * @param _chainId The ID of the chain.
+     * @param _tokenAddress The address of the token.
+     * @param _enabled A boolean indicating if the asset is enabled.
+     */
+    function updateAsset(
+        uint256 _id,
+        uint256 _decimal,
+        string memory _name,
+        string memory _symbol,
+        string memory _chainName,
+        uint256 _chainId,
+        address _tokenAddress,
+        bool _enabled,
+        bool _isIndex
+    )
+        public
+        whenNotPaused
+        onlyAdmin
+    {
+        require(_decimal != 0, "decimal should not be 0");
+        require(keccak256(abi.encodePacked(_name)) != keccak256(abi.encodePacked("")), "name should not be null");
+        require(keccak256(abi.encodePacked(_symbol)) != keccak256(abi.encodePacked("")), "symbol should not be null");
+        require(keccak256(abi.encodePacked(_chainName)) != keccak256(abi.encodePacked("")), "chainName should not be null");
+        require(_chainId != 0, "chainId should not be 0");
+        require(_tokenAddress != address(0), "tokenAddress should not be 0");
+        require(checkAssetExist(_decimal, _chainId, _tokenAddress) == false, "Asset already exists");
+
+        require(whiteListAssetMap[_id].exist == true, "Asset doesn't exist");
+
+        Asset memory asset = Asset(
+            _id,
+            _decimal,
+            _name,
+            _symbol,
+            _chainName,
+            _chainId,
+            _tokenAddress,
+            _enabled,
+            _isIndex,
+            true
+        );
+
+        whiteListAssetMap[_id] = asset;
+
+        emit AssetUpdated(_id, _name, _symbol, _chainName, _tokenAddress);
+    }
+
+    /**
+     * @dev Retrieves an asset by ID.
+     * @param _id The ID of the asset to retrieve.
+     * @return The asset object.
+     */
+    function getAsset(uint256 _id) public view returns (Asset memory) {
+        require(_id != 0, "id should not be 0");
+        require(whiteListAssetMap[_id].exist == true, "id is not valid");
+        return whiteListAssetMap[_id];
+    }
+
+    /**
+     * @dev Retrieves multiple assets by their IDs.
+     * @param _ids The IDs of the assets to retrieve.
+     * @return An array of asset objects.
+     */
+    function getAssetsOfIndex(uint256[] memory _ids) public view returns (Asset[] memory) {
+        Asset[] memory result = new Asset[](_ids.length);
+        uint256 array_index = 0;
+
+        for (uint256 i = 0; i < _ids.length; i++) {
+            require(whiteListAssetMap[_ids[i]].exist == true, "id is not valid");
+            result[array_index] = whiteListAssetMap[_ids[i]];
+            array_index = array_index.add(1);
+        }
+
+        return result;
+    }
+
+    /**
+     * @dev Retrieves the total count of assets.
+     * @return The total count of assets.
+     */
+    function getAssetCount() public view returns (uint256) {
+        return assetId.current().sub(1);
+    }
+
+    /**
+     * @dev Checks if an asset id is an index or ordinary asset.
+     * @param _id The id of the asset.
+     * @return A boolean indicating if the asset is index and name of that index.
+     */
+
+
+    function isAssetAnIndex(uint256 _id) public view returns (string memory, bool) {
+        return (whiteListAssetMap[_id].name, whiteListAssetMap[_id].isIndex);
+    }
+
+    /**
+     * @dev Checks if an asset with the given properties already exists.
+     * @param _decimal The decimal value of the asset.
+     * @param _chainId The ID of the chain.
+     * @param _tokenAddress The address of the token.
+     * @return A boolean indicating if the asset exists.
+     */
+    function checkAssetExist(uint256 _decimal, uint256 _chainId, address _tokenAddress) internal view returns (bool) {
+        for (uint256 i = 1; i <= assetId.current().sub(1); i++) {
+            if (whiteListAssetMap[i].decimal == _decimal &&
+                whiteListAssetMap[i].chainId == _chainId &&
+                whiteListAssetMap[i].tokenAddress == _tokenAddress)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
