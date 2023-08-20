@@ -1,1 +1,649 @@
+// SPDX-License-Identifier: MIT
+//zahra davoodabady
+pragma solidity ^0.8.18 ;
 
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
+import "@openzeppelin/contracts/utils/Counters.sol";
+import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+
+import "./Assets.sol" ;
+
+    /**
+    * @title Indices
+    * @dev A smart contract to manage and control indices of assets.
+    */
+
+contract Indices is Pausable , Ownable  , AccessControl {
+
+    // Library
+
+    using SafeMath for uint;  
+    using Counters for Counters.Counter;
+
+
+    // STATE VARIABLES
+
+    Counters.Counter private  indexId;
+    bytes32 public constant Admin = keccak256("Admin");
+    //@dev indexId => indexInfo
+    mapping (uint256 => Index ) public indicesMap ;
+    //@dev indexId => constituents
+    mapping ( uint256 => Constituent ) private indexConstituent ; 
+
+    Assets private assetManager ; 
+
+    // STRUCTS 
+
+    struct Constituent{  
+       
+        uint256[] assetIdList;
+        uint256[] weightList;
+    }
+
+    struct Index{
+        uint256 id;
+        string name;
+        string symbol;
+        string description;
+        uint256 decimal ; 
+        address tokenAddress ; 
+        uint256 price; //@dev price in stable coin  
+        uint256 createDate;
+        
+        uint256 assetCount;
+        string chainName;
+        uint256 chainId;
+        bool enabled;
+        bool exist;
+    }
+
+      
+
+
+    // EVENTS
+
+    event AddAdminRole(address indexed adminAddress, string indexed role );
+    /**
+     * @dev Emitted when an address has the Admin role revoked.
+     * @param adminAddress The address that had the Admin role revoked.
+     * @param role The name of the role revoked, in this case, "Admin".
+     */
+    event DelAdminRole(address indexed adminAddress, string indexed role );
+    /**
+     * @dev Emitted when a new index is created.
+     * @param id The ID of the new index.
+     * @param name The name of the new index.
+     * @param symbol The symbol of the new index.
+     * @param description The description of the new index.
+     * @param price The price of the new index in stable coin.
+     * @param chainName The name of the blockchain associated with the index.
+     * @param chainId The ID of the blockchain associated with the index.
+     * @param assetCount The number of assets in the new index.
+     */
+    event IndexCreated ( uint256 id , string name , string symbol , string description , uint256 price , string chainName , uint256 chainId , uint256 assetCount  ) ; 
+    /**
+     * @dev Emitted when an existing index is updated.
+     * @param id The ID of the updated index.
+     * @param name The updated name of the index.
+     * @param symbol The updated symbol of the index.
+     * @param description The updated description of the index.
+     * @param price The updated price of the index in stable coin.
+     * @param chainName The updated name of the blockchain associated with the index.
+     * @param chainId The updated ID of the blockchain associated with the index.
+     * @param assetCount The updated number of assets in the index.
+     */
+    event IndexUpdated ( uint256 id , string name , string symbol , string description , uint256 price , string chainName , uint256 chainId , uint256 assetCount  ) ; 
+      /**
+     * @dev Emitted when an existing index is enabled.
+     * @param id The ID of the enabled index.
+     */
+    event IndexEnabled ( uint256 id  ) ;
+    /**
+     * @dev Emitted when an existing index is disabled.
+     * @param id The ID of the disabled index.
+     */
+    event IndexDisabled ( uint256 id  ) ;
+
+
+    // MODIFIERS & RELATED FUNCTIONS
+
+    /**
+
+    @dev Modifier to restrict access to only administrators.
+    @notice Restricted to admins.
+    */
+
+    modifier onlyAdmin()
+    {
+        require(isAdmin(msg.sender) || isRootAdmin(msg.sender) , "Restricted to Admins.");
+        _;
+    }
+
+    /**
+
+    @dev Modifier to restrict access to only root administrators.
+    @notice Restricted to root admins.
+    */  
+
+    modifier onlyRootAdmin()
+    {
+        require( isRootAdmin(msg.sender) , "Restricted to Admins.");
+        _;
+    }
+
+
+    /**
+
+    @dev Checks if an account is a root administrator.
+    @param account The address to check.
+    @return True if the account is a root administrator, false otherwise.
+    */
+    function isRootAdmin(address account) public  view returns (bool)
+    {
+        return hasRole(DEFAULT_ADMIN_ROLE, account);
+    }
+
+    /**
+
+    @dev Checks if an account is an administrator.
+    @param account The address to check.
+    @return True if the account is an administrator, false otherwise.
+    */
+
+
+    function isAdmin(address account) public  view returns (bool)
+    {
+        return hasRole(Admin, account);
+    }
+
+    /**
+
+    @dev Adds an administrator.
+    @param account The address of the account to add as an administrator.
+    */
+    
+    function addAdmin(address account) public  onlyRootAdmin
+    {
+        grantRole(Admin, account);
+        emit AddAdminRole(  account , "Admin");
+    }
+
+    /**
+
+    @dev Removes an administrator.
+    @param account The address of the account to remove as an administrator.
+    */
+
+    function RemoveAdmin(address account) public  onlyRootAdmin
+    {
+        require( isRootAdmin(account) == false , "Removing Root Admin is not Allowed" );
+        revokeRole(Admin, account);
+        emit DelAdminRole ( account , "Admin" ); 
+    }
+
+    /**
+
+    @dev Pauses the contract.
+    @notice Only callable by administrators.
+    */
+    function  PauseContract() public onlyAdmin //onlyAdmins
+    {
+        _pause();
+    }
+
+    /**
+    @dev Unpauses the contract.
+    @notice Only callable by administrators.
+    */
+
+    function UnPauseContract() public onlyAdmin //onlyAdmins
+    {
+        _unpause();
+    }
+
+    // CONSTRUCTOR
+
+    /**
+
+    @dev Contract constructor.
+    @param _assetManager The address of the Asset contract.
+    */
+    constructor(  address _assetManager )  
+    {
+        assetManager = Assets( _assetManager ) ;
+        _setupRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _setRoleAdmin(Admin, DEFAULT_ADMIN_ROLE);
+        indexId.increment();
+    }
+
+
+    // Functions
+    /**
+
+    @dev Creates a new index.
+    @param _name The name of the index.
+    @param _symbol The symbol of the index.
+    @param _price The price of the index.
+    @param _description The description of the index.
+    @param _chainName The name of the chain associated with the index.
+    @param _chainId The ID of the chain associated with the index.
+    @param _enabled Whether the index is enabled.
+    @param _constituent The constituent assets of the index.
+    @param _decimal The decimal value of the index.
+    @param _tokenAddress The address of the token associated with the index.
+*/
+
+    function createIndex( string memory _name, string memory _symbol , uint256 _price , string memory _description , string memory  _chainName , uint256 _chainId , bool _enabled , Constituent memory  _constituent  , uint256 _decimal , address _tokenAddress   ) public whenNotPaused  onlyAdmin
+    {   
+        require( keccak256(abi.encodePacked(_name)) != keccak256(abi.encodePacked("")) , "name shoulden't be null");
+        require( keccak256(abi.encodePacked(_symbol)) != keccak256(abi.encodePacked("")) , "symbol shoulden't be null");
+        require( keccak256(abi.encodePacked(_description)) != keccak256(abi.encodePacked("")) , "description shoulden't be null");
+        require( keccak256(abi.encodePacked(_chainName)) != keccak256(abi.encodePacked("")) , "chainName shoulden't be null");
+        require( _price > 0 , "price should be > 0 ");
+        require( _chainId != 0, "chainId shoulden't be 0 "); 
+        require( _constituent.assetIdList.length > 0 , "asset count should > 0 ");
+        require(  _constituent.assetIdList.length ==  _constituent.weightList.length , "asset count and weight count should be equal" );
+        //require( _tokenAddress != address(0) , "tokenAddress shoulden't be 0 ");
+
+        uint256 _id = indexId.current() ;
+        require( indicesMap[_id].exist == false, "index already exist. ");
+
+        for ( uint i = 0 ; i < _constituent.assetIdList.length ; i++)
+        {
+            require ( assetManager.getAsset( _constituent.assetIdList[i]  ).exist == true , "Asset Doesn't exist. " ) ;
+            require ( assetManager.getAsset( _constituent.assetIdList[i]  ).enabled == true , "Asset isn't enabled. ") ; 
+        }
+
+        uint256 sum = 0 ;
+        for ( uint i = 0 ; i < _constituent.weightList.length ; i++)
+        {
+            sum = sum.add(  _constituent.weightList[i]  ); 
+        }
+        require ( sum == 10000 , "Wrong weight sum");
+        
+        Index memory index =  Index ( _id , _name , _symbol ,  _description , _decimal , _tokenAddress , _price  , block.timestamp  , _constituent.assetIdList.length , _chainName , _chainId , _enabled , true );
+
+        indicesMap[_id] = index ; 
+        indexConstituent[_id] = _constituent ;  
+        indexId.increment();
+        emit IndexCreated (  _id ,  _name , _symbol , _description , _price ,  _chainName ,  _chainId ,   _constituent.assetIdList.length  ) ; 
+        
+    }
+
+     /**
+    @dev Updates an index.
+    @param _id The ID of the index to update.
+    @param _name The name of the index.
+    @param _symbol The symbol of the index.
+    @param _price The price of the index.
+    @param _description The description of the index.
+    @param _chainName The name of the chain.
+    @param _chainId The ID of the chain.
+    @param _enabled Indicates if the index is enabled or not.
+    @param _constituent The constituent data for the index.
+    @param _decimal The number of decimals for the index.
+    @param _tokenAddress The address of the token associated with the index.
+    @notice This function can only be called by administrators and when the contract is not paused.
+    */
+
+  
+    function updateIndex(  uint256 _id , string memory _name, string memory _symbol , uint256 _price , string memory _description , string memory  _chainName , uint256 _chainId , bool _enabled , Constituent memory  _constituent   , uint256 _decimal , address _tokenAddress    ) public  whenNotPaused onlyAdmin
+    {   
+        require( keccak256(abi.encodePacked(_name)) != keccak256(abi.encodePacked("")) , "name shoulden't be null");
+        require( keccak256(abi.encodePacked(_symbol)) != keccak256(abi.encodePacked("")) , "symbol shoulden't be null");
+        require( keccak256(abi.encodePacked(_description)) != keccak256(abi.encodePacked("")) , "description shoulden't be null");
+        require( keccak256(abi.encodePacked(_chainName)) != keccak256(abi.encodePacked("")) , "chainName shoulden't be null");
+        require( _price > 0 , "price should be > 0 ");
+        require( _chainId != 0, "chainId shoulden't be 0 "); 
+        require( _constituent.assetIdList.length > 0 , "asset count should > 0 ");
+        require(  _constituent.assetIdList.length ==  _constituent.weightList.length , "asset count and weight count should be equal" );
+        //require( _tokenAddress != address(0) , "tokenAddress shoulden't be 0 ");
+
+        require( indicesMap[_id].exist == true, "index Doesn't exist. ");
+
+        for ( uint i = 0 ; i < _constituent.assetIdList.length ; i++)
+        {
+            require ( assetManager.getAsset( _constituent.assetIdList[i]  ).exist == true , "Asset Doesn't exist. " ) ;
+            require ( assetManager.getAsset( _constituent.assetIdList[i]  ).enabled == true , "Asset isn't enabled. ") ; 
+        }
+
+        uint256 sum = 0 ;
+        for ( uint i = 0 ; i < _constituent.weightList.length ; i++)
+        {
+            sum = sum.add(  _constituent.weightList[i]  ); 
+        }
+        require ( sum == 10000 , "Wrong weight sum");
+
+        Index memory index =  Index ( _id , _name , _symbol ,  _description , _decimal , _tokenAddress , _price  , block.timestamp  , _constituent.assetIdList.length , _chainName , _chainId , _enabled , true );
+
+        indicesMap[_id] = index ; 
+        indexConstituent[_id] = _constituent ;  
+
+        emit IndexUpdated (  _id ,  _name , _symbol , _description , _price ,  _chainName ,  _chainId ,   _constituent.assetIdList.length  ) ; 
+        
+    }
+
+    /**
+
+    @dev Enables an index.
+    @param _indexId The ID of the index to enable.
+    Requirements:
+    The index ID should not be 0.
+    The index should exist in the indicesMap.
+    The index should not already be enabled.
+    */
+
+    function enableIndex(uint256 _indexId) public whenNotPaused onlyAdmin 
+    {
+        require( _indexId != 0, "id shoulden't be 0 ");
+        require( indicesMap[_indexId].exist == true, "Index Doesn't exist. ");
+        require( indicesMap[_indexId].enabled == false, "Index is enabled. ");
+        indicesMap[_indexId].enabled = true; 
+        emit IndexEnabled( _indexId );
+    }
+
+    /**
+
+    @dev Disables an index.
+    @param _indexId The ID of the index to disable.
+    Requirements:
+    The index ID should not be 0.
+    The index should exist in the indicesMap.
+    The index should already be enabled.
+    */
+    function disableIndex(uint256 _indexId) public whenNotPaused onlyAdmin 
+    {
+        require( _indexId != 0, "id shoulden't be 0 ");
+        require( indicesMap[_indexId].exist == true, "Index Doesn't exist. ");
+        require( indicesMap[_indexId].enabled == true, "Index is disabled. ");
+        indicesMap[_indexId].enabled = false; 
+        emit IndexDisabled( _indexId );
+    }
+
+    /**
+
+    @dev Adds an asset to an index.
+    @param _indexId The ID of the index to add the asset to.
+    @param _assetId The ID of the asset to add.
+    @param _weight The weight of the asset in the index.
+
+    Requirements:
+    The index ID should not be 0.
+    The index should exist in the indicesMap.
+    The asset should exist in the assetManager.
+    The asset should be enabled.
+    The asset should not already exist in the index.
+    */
+    function addAssetToIndex (uint256 _indexId , uint256 _assetId , uint256 _weight ) public whenNotPaused onlyAdmin
+    {
+        require( _indexId != 0, "id shoulden't be 0 ");
+        require( indicesMap[_indexId].exist == true, "Index Doesn't exist. ");
+        require ( assetManager.getAsset( _assetId  ).exist == true , "Asset Doesn't exist. " ) ;
+        require ( assetManager.getAsset( _assetId ).enabled == true , "Asset isn't enabled. ") ;
+        require( checkAssetExistInIndex( _indexId , _assetId ) == false , "Asset exist in Index" );
+
+        indicesMap[_indexId].assetCount = indicesMap[_indexId].assetCount.add(1);
+        indexConstituent[_indexId].assetIdList.push(_assetId);
+        indexConstituent[_indexId].weightList.push(_weight) ;
+
+    }
+
+
+    /**
+
+    @dev Removes an asset from an index.
+    @param _indexId The ID of the index to remove the asset from.
+    @param _assetId The ID of the asset to remove.
+
+    Requirements:
+    The index ID should not be 0.
+    The index should exist in the indicesMap.
+    The asset should exist in the assetManager.
+    The asset should exist in the index.
+    */
+
+    function removeAssetFromIndex (uint256 _indexId , uint256 _assetId  ) public whenNotPaused onlyAdmin
+    {
+        require( _indexId != 0, "id shoulden't be 0 ");
+        require( indicesMap[_indexId].exist == true, "Index Doesn't exist. ");
+        require ( assetManager.getAsset( _assetId  ).exist == true , "Asset Doesn't exist. " ) ;
+        require( checkAssetExistInIndex( _indexId , _assetId ) == true , "Asset exist in Index" );
+
+        indicesMap[_indexId].assetCount = indicesMap[_indexId].assetCount.sub(1);
+        
+
+        uint256 length = indexConstituent[_indexId].assetIdList.length ;
+
+        for ( uint256 i = 0 ; i < indexConstituent[_indexId].assetIdList.length ; i++  )
+        {
+            if ( indexConstituent[_indexId].assetIdList[i] == _assetId )
+            {
+                indexConstituent[_indexId].assetIdList[i] = indexConstituent[_indexId].assetIdList[  length.sub(1)  ] ;
+                indexConstituent[_indexId].weightList[i] = indexConstituent[_indexId].weightList[   length.sub(1) ]  ;
+                indexConstituent[_indexId].assetIdList.pop();
+                indexConstituent[_indexId].weightList.pop();
+            }
+        }
+        
+
+    }
+
+    /**
+
+    @dev Changes the weight of an asset in an index.
+    @param _indexId The ID of the index containing the asset.
+    @param _assetId The ID of the asset to change the weight of.
+    @param _weight The new weight of the asset.
+
+    Requirements:
+    The index ID should not be 0.
+    The index should exist in the indicesMap.
+    The asset should exist in the index.
+    */
+
+    function changeAssetWeight (uint256 _indexId , uint256 _assetId , uint256 _weight ) public whenNotPaused onlyAdmin
+    {
+        require( _indexId != 0, "id shoulden't be 0 ");
+        require( indicesMap[_indexId].exist == true, "Index Doesn't exist. ");
+        require( checkAssetExistInIndex( _indexId , _assetId ) == true , "Asset Doesn't exist in Index" );
+
+        for ( uint256 i = 0 ; i < indexConstituent[_indexId].assetIdList.length ; i++  )
+        {
+            if ( indexConstituent[_indexId].assetIdList[i] == _assetId )
+            {
+                indexConstituent[_indexId].weightList[i] = _weight ;
+            }
+        }
+        
+    }
+
+    /**
+
+    @dev Sets the price of an index.
+    @param _indexId The ID of the index to set the price for.
+    @param _price The new price of the index.
+    Requirements:
+    The index ID should not be 0.
+    The index should exist in the indicesMap.
+    */
+    function setPriceOfIndex ( uint256 _indexId  , uint256 _price ) public whenNotPaused onlyAdmin
+    {
+        require( _indexId != 0, "id shoulden't be 0 ");
+        require( indicesMap[_indexId].exist == true, "Index Doesn't exist. ");
+        indicesMap[_indexId].price = _price ; 
+    }
+
+
+    // GETTER FUNCTIONS
+
+    /**
+
+    @dev Checks if an asset exists in an index.
+    @param _indexId The ID of the index to check.
+    @param _assetId The ID of the asset to check.
+    @return A boolean indicating whether the asset exists in the index or not.
+
+    Requirements:
+    The index ID should not be 0.
+    The index should exist in the indicesMap.
+    */
+
+    function checkAssetExistInIndex ( uint256 _indexId , uint256 _assetId ) public view returns (bool)
+    {
+        require( _indexId != 0, "id shoulden't be 0 ");
+        require( indicesMap[_indexId].exist == true, "Index Doesn't exist. ");
+
+        for ( uint256 i = 0 ; i < indexConstituent[_indexId].assetIdList.length ; i++  )
+        {
+            if ( indexConstituent[_indexId].assetIdList[i] == _assetId )
+            {
+                return true ;
+            }
+        }
+        return false ; 
+    }
+
+    /**
+
+    @dev Retrieves an index by ID.
+    @param _id The ID of the index to retrieve.
+    @return The Index struct representing the index.
+    Requirements:
+    The index ID should not be 0.
+    The index should exist in the indicesMap.
+    */
+
+
+    function getIndex(uint256 _id) public view returns(Index memory )
+    {
+        require( _id != 0, "id shoulden't be 0 ");
+        require( indicesMap[_id].exist == true, "Index Doesn't exist. ");
+        return ( indicesMap[_id] ); 
+    }
+
+    /**
+
+    @dev Retrieves a constituent by ID.
+    @param _id The ID of the constituent to retrieve.
+    @return The Constituent struct representing the constituent.
+    Requirements:
+    The index ID should not be 0.
+    The index should exist in the indicesMap.
+    */
+
+
+    function getConstituent(uint256 _id ) public view returns ( Constituent memory ) 
+    {
+
+        require( _id != 0, "id shoulden't be 0 ");
+        require( indicesMap[_id].exist == true, "Index Doesn't exist. ");
+        return indexConstituent[_id] ;
+    }
+
+    /**
+
+    @dev Retrieves multiple indices by their IDs.
+    @param _ids The array of index IDs to retrieve.
+    @return An array of Index structs representing the indices.
+
+    Requirements:
+    Each index ID should be valid and exist in the indicesMap.
+    */
+
+    function getIndices (uint256 [] memory  _ids ) public view returns ( Index [] memory ) {
+        
+        Index[] memory  result  = new Index[] ( _ids.length ) ;
+        uint256 array_index = 0 ;
+
+        for ( uint256 i = 0  ; i < _ids.length;  i++ )
+        {
+            require( indicesMap[ _ids[i]  ].exist == true , "id is not valid"); 
+            result[ array_index ] = indicesMap[ _ids[i] ]  ;
+            array_index = array_index.add(1) ; 
+        }
+        
+        return result;
+
+    }
+
+    /**
+
+    @dev Retrieves the count of assets in an index.
+    @param _indexId The ID of the index.
+    @return The count of assets in the index.
+    */
+
+    function getIndexAssetCount ( uint256 _indexId ) public view returns ( uint256 )
+    {
+        return indexConstituent[ _indexId ].assetIdList.length ; 
+    }
+
+    /**
+
+    @dev Retrieves multiple constituents by their IDs.
+    @param _ids The array of constituent IDs to retrieve.
+    @return An array of Constituent structs representing the constituents.
+
+    Requirements:
+    Each index ID should be valid and exist in the indicesMap.
+    */
+
+    function getConstituents (uint256[] memory  _ids ) public view returns ( Constituent [] memory ) 
+    {
+
+        Constituent[] memory  result  = new Constituent[] ( _ids.length ) ;
+        uint256 array_index = 0 ;
+
+        for ( uint256 i = 0  ; i < _ids.length;  i++ )
+        {
+            require( indicesMap[ _ids[i]  ].exist == true , "id is not valid"); 
+            result[ array_index ] = indexConstituent[ _ids[i] ]  ;
+            array_index = array_index.add(1) ; 
+        }
+        
+        return result;
+    }
+
+
+    /**
+
+    @dev Retrieves the assets of an index.
+    @param _indexId The ID of the index.
+    @return An array of Asset structs representing the assets of the index.
+    Requirements:
+    The index ID should not be 0.
+    The index should exist in the indicesMap.
+    */
+
+    function getAssetsOfIndex ( uint256 _indexId ) public view returns ( Assets.Asset [] memory )
+    {
+        require( _indexId != 0, "id shoulden't be 0 ");
+        require( indicesMap[_indexId].exist == true, "Index Doesn't exist. ");
+        return assetManager.getAssetsOfIndex(indexConstituent[_indexId].assetIdList) ; 
+    }
+
+    /**
+
+    @dev Retrieves an index and its assets by ID.
+    @param _indexId The ID of the index.
+    @return The Index struct representing the index and an array of Asset structs representing its assets.
+    Requirements:
+    The index ID should not be 0.
+    The index should exist in the indicesMap.
+    */
+
+
+    function getIndexAndItsAssets ( uint256 _indexId ) public view returns (Index  memory ,  Assets.Asset [] memory )
+    {
+
+        require( _indexId != 0, "id shoulden't be 0 ");
+        require( indicesMap[_indexId].exist == true, "Index Doesn't exist. ");
+        return ( indicesMap[_indexId] , getAssetsOfIndex(_indexId)  ) ;  
+
+    }
+
+
+
+}
